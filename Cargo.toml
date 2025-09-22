@@ -1,0 +1,19 @@
+[package]
+name = "Tokenly"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+webrtc = "0.13"
+webrtc-ice = "0.13"
+webrtc-util = "0.8"
+axum = { version = "0.7", features = ["ws", "macros"] }
+tokio = {version = "1.40.0", features = ["full"]}
+serde = {version = "1", features = ["derive"]}
+serde_json = "1"
+tokio-tungstenite = "0.23"
+futures = "0.3"
+tracing = "0.1.41"
+uuid = { version = "1.18.1", features = ["v4"] }
+tower = "0.4"
+tower-http = { version = "0.5", features = ["cors"] }
