@@ -1,0 +1,727 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebRTC Signaling Test Client</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        .container {
+            margin-bottom: 20px;
+            padding: 15px;
+            border: 1px solid #ccc;
+            border-radius: 5px;
+        }
+        button {
+            margin: 5px;
+            padding: 10px 15px;
+            cursor: pointer;
+        }
+        #messages {
+            height: 300px;
+            overflow-y: auto;
+            border: 1px solid #ccc;
+            padding: 10px;
+            background-color: #f9f9f9;
+            white-space: pre-wrap;
+        }
+        input[type="text"] {
+            padding: 5px;
+            margin: 5px;
+            width: 200px;
+        }
+    </style>
+</head>
+<body>
+    <h1>WebRTC Signaling Server Test</h1>
+
+    <div class="container">
+        <h3>Connection</h3>
+        <button onclick="connect()">Connect to Signaling Server</button>
+        <button onclick="disconnect()">Disconnect</button>
+        <div>Status: <span id="status">Disconnected</span></div>
+    </div>
+
+    <div class="container">
+        <h3>Room Management</h3>
+        <input type="text" id="roomId" placeholder="Room ID" value="test-room">
+        <button onclick="joinRoom()">Join Room</button>
+        <button onclick="leaveRoom()">Leave Room</button>
+    </div>
+
+    <div class="container">
+        <h3>WebRTC Video Call</h3>
+        <div style="margin-bottom: 10px;">
+            <label>
+                <input type="radio" name="mediaType" value="camera" checked>
+                📷 Camera & Microphone
+            </label>
+            <br>
+            <label>
+                <input type="radio" name="mediaType" value="screen">
+                🖥️ Screen Share (with audio)
+            </label>
+        </div>
+        <button onclick="startCall()">Start Call</button>
+        <button onclick="switchToScreenShare()" id="screenShareBtn" style="display:none;">📺 Switch to Screen Share</button>
+        <button onclick="switchToCamera()" id="cameraBtn" style="display:none;">📷 Switch to Camera</button>
+        <button onclick="hangup()">Hang Up</button>
+        <div style="margin-top: 10px;">
+            <video id="localVideo" width="300" height="200" autoplay muted style="border: 1px solid #ccc; margin: 5px;"></video>
+            <video id="remoteVideo" width="300" height="200" autoplay style="border: 1px solid #ccc; margin: 5px;"></video>
+        </div>
+        <div style="margin-top: 10px;">
+            <label>Local Video</label> &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; <label>Remote Video</label>
+        </div>
+        <div style="margin-top: 10px; font-size: 12px; color: #666;">
+            Status: <span id="callStatus">Not connected</span>
+        </div>
+    </div>
+
+    <div class="container">
+        <h3>Manual WebRTC Testing</h3>
+        <button onclick="createOffer()">Create Offer</button>
+        <button onclick="createAnswer()">Create Answer</button>
+        <button onclick="addIceCandidate()">Send Ice Candidate</button>
+    </div>
+
+    <div class="container">
+        <h3>Messages</h3>
+        <button onclick="clearMessages()">Clear</button>
+        <div id="messages"></div>
+    </div>
+
+    <script>
+        let ws = null;
+        let sessionId = null;
+        let peerConnection = null;
+        let localStream = null;
+        let remoteStream = null;
+        let pendingIceCandidates = [];
+
+        // WebRTC configuration
+        const rtcConfig = {
+            iceServers: [
+                { urls: 'stun:stun.l.google.com:19302' },
+                { urls: 'stun:stun1.l.google.com:19302' },
+                {
+                    urls: 'turn:127.0.0.1:3478',
+                    username: 'testuer',
+                    credential: 'testpass'
+                }
+            ]
+        };
+
+        function log(message) {
+            const messages = document.getElementById('messages');
+            const timestamp = new Date().toLocaleTimeString();
+            messages.textContent += `[${timestamp}] ${message}\n`;
+            messages.scrollTop = messages.scrollHeight;
+        }
+
+        function updateStatus(status) {
+            document.getElementById('status').textContent = status;
+        }
+
+        function connect() {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                log('Already connected');
+                return;
+            }
+
+            ws = new WebSocket('ws://127.0.0.1:3000/signaling');
+
+            ws.onopen = function() {
+                log('Connected to signaling server');
+                updateStatus('Connected');
+            };
+
+            ws.onmessage = function(event) {
+                try {
+                    const message = JSON.parse(event.data);
+                    log(`Received: ${JSON.stringify(message, null, 2)}`);
+
+                    switch(message.type) {
+                        case 'connected':
+                            sessionId = message.session_id;
+                            log(`Session ID: ${sessionId}`);
+                            break;
+                        case 'join-room':
+                            if (message.success) {
+                                log(`Successfully joined room: ${message.room_id}`);
+                                log(`Participants: ${message.participants}`);
+                            } else {
+                                log(`Failed to join room: ${message.room_id}`);
+                            }
+                            break;
+                        case 'user-joined':
+                            log(`User joined: ${message.session_id}`);
+                            break;
+                        case 'user-left':
+                            log(`User left: ${message.session_id}`);
+                            break;
+                        case 'offer':
+                            log(`Received offer from: ${message.session_id}`);
+                            handleOffer(message);
+                            break;
+                        case 'answer':
+                            log(`Received answer from: ${message.session_id}`);
+                            handleAnswer(message);
+                            break;
+                        case 'ice-candidate':
+                            log(`Received ICE candidate from: ${message.session_id}`);
+                            handleIceCandidate(message);
+                            break;
+                    }
+                } catch (e) {
+                    log(`Error parsing message: ${e.message}`);
+                    log(`Raw message: ${event.data}`);
+                }
+            };
+
+            ws.onclose = function() {
+                log('Disconnected from signaling server');
+                updateStatus('Disconnected');
+                sessionId = null;
+            };
+
+            ws.onerror = function(error) {
+                log(`WebSocket error: ${error}`);
+                updateStatus('Error');
+            };
+        }
+
+        function disconnect() {
+            if (ws) {
+                ws.close();
+                ws = null;
+            }
+        }
+
+        function joinRoom() {
+            if (!ws || ws.readyState !== WebSocket.OPEN) {
+                log('Not connected to signaling server');
+                return;
+            }
+
+            const roomId = document.getElementById('roomId').value;
+            if (!roomId) {
+                log('Please enter a room ID');
+                return;
+            }
+
+            const message = {
+                event: 'message',
+                data: {
+                    type: 'join-room',
+                    room_id: roomId,
+                    session_id: sessionId || 'test-session'
+                }
+            };
+
+            ws.send(JSON.stringify(message));
+            log(`Sent join room request: ${roomId}`);
+        }
+
+        function leaveRoom() {
+            if (!ws || ws.readyState !== WebSocket.OPEN) {
+                log('Not connected to signaling server');
+                return;
+            }
+
+            const message = {
+                event: 'message',
+                data: {
+                    type: 'leave-room'
+                }
+            };
+
+            ws.send(JSON.stringify(message));
+            log('Sent leave room request');
+        }
+
+        function createOffer() {
+            if (!ws || ws.readyState !== WebSocket.OPEN) {
+                log('Not connected to signaling server');
+                return;
+            }
+
+            const roomId = document.getElementById('roomId').value;
+            const message = {
+                event: 'message',
+                data: {
+                    type: 'offer',
+                    sdp: 'fake-offer-sdp-for-testing',
+                    session_id: sessionId || 'test-session',
+                    room_id: roomId
+                }
+            };
+
+            ws.send(JSON.stringify(message));
+            log('Sent fake offer');
+        }
+
+        function createAnswer() {
+            if (!ws || ws.readyState !== WebSocket.OPEN) {
+                log('Not connected to signaling server');
+                return;
+            }
+
+            const roomId = document.getElementById('roomId').value;
+            const message = {
+                event: 'message',
+                data: {
+                    type: 'answer',
+                    sdp: 'fake-answer-sdp-for-testing',
+                    session_id: sessionId || 'test-session',
+                    room_id: roomId
+                }
+            };
+
+            ws.send(JSON.stringify(message));
+            log('Sent fake answer');
+        }
+
+        function addIceCandidate() {
+            if (!ws || ws.readyState !== WebSocket.OPEN) {
+                log('Not connected to signaling server');
+                return;
+            }
+
+            const roomId = document.getElementById('roomId').value;
+            const message = {
+                type: 'ice-candidate',
+                candidate: 'candidate:1 1 UDP 2130706431 192.168.1.100 54400 typ host',
+                sdpMid: '0',
+                sdpMLineIndex: 0,
+                session_id: sessionId || 'test-session',
+                room_id: roomId
+            };
+
+            ws.send(JSON.stringify(message));
+            log('Sent fake ICE candidate');
+        }
+
+        function clearMessages() {
+            document.getElementById('messages').textContent = '';
+        }
+
+        // Helper function to update call status
+        function updateCallStatus(status) {
+            document.getElementById('callStatus').textContent = status;
+        }
+
+        // Helper function to get selected media type
+        function getSelectedMediaType() {
+            const radioButtons = document.querySelectorAll('input[name="mediaType"]');
+            for (const radio of radioButtons) {
+                if (radio.checked) {
+                    return radio.value;
+                }
+            }
+            return 'camera'; // default
+        }
+
+        // Get user media based on selection
+        async function getUserMedia() {
+            const mediaType = getSelectedMediaType();
+
+            if (mediaType === 'screen') {
+                try {
+                    // Get screen share with audio
+                    const screenStream = await navigator.mediaDevices.getDisplayMedia({
+                        video: true,
+                        audio: true
+                    });
+
+                    // Also get audio from microphone if screen audio is not available
+                    try {
+                        const audioStream = await navigator.mediaDevices.getUserMedia({
+                            video: false,
+                            audio: true
+                        });
+
+                        // Combine screen video with microphone audio
+                        const combinedStream = new MediaStream([
+                            ...screenStream.getVideoTracks(),
+                            ...audioStream.getAudioTracks()
+                        ]);
+
+                        return combinedStream;
+                    } catch (audioError) {
+                        log('Microphone not available, using screen audio only');
+                        return screenStream;
+                    }
+                } catch (error) {
+                    log(`Screen share failed: ${error.message}. Falling back to camera.`);
+                    return await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+                }
+            } else {
+                // Get camera and microphone
+                return await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+            }
+        }
+
+        // WebRTC Functions
+        async function startCall() {
+            try {
+                updateCallStatus('Getting media...');
+
+                // Get user media based on selection
+                localStream = await getUserMedia();
+                document.getElementById('localVideo').srcObject = localStream;
+
+                const mediaType = getSelectedMediaType();
+                log(`Local ${mediaType} stream started`);
+                updateCallStatus('Media ready');
+
+                // Show media switch buttons
+                if (mediaType === 'camera') {
+                    document.getElementById('screenShareBtn').style.display = 'inline';
+                    document.getElementById('cameraBtn').style.display = 'none';
+                } else {
+                    document.getElementById('screenShareBtn').style.display = 'none';
+                    document.getElementById('cameraBtn').style.display = 'inline';
+                }
+
+                // Create peer connection
+                createPeerConnection();
+
+                // Add local stream to peer connection
+                localStream.getTracks().forEach(track => {
+                    peerConnection.addTrack(track, localStream);
+                });
+
+                updateCallStatus('Creating offer...');
+
+                // Create and send offer
+                const offer = await peerConnection.createOffer();
+                await peerConnection.setLocalDescription(offer);
+
+                const roomId = document.getElementById('roomId').value;
+                const message = {
+                    event: 'message',
+                    data: {
+                        type: 'offer',
+                        sdp: offer.sdp,
+                        session_id: sessionId || 'test-session',
+                        room_id: roomId
+                    }
+                };
+
+                ws.send(JSON.stringify(message));
+                log('Sent offer for video call');
+                updateCallStatus('Waiting for answer...');
+            } catch (error) {
+                log(`Error starting call: ${error.message}`);
+                updateCallStatus(`Error: ${error.message}`);
+            }
+        }
+
+        function createPeerConnection() {
+            peerConnection = new RTCPeerConnection(rtcConfig);
+
+            // Handle ICE candidates
+            peerConnection.onicecandidate = function(event) {
+                if (event.candidate) {
+                    const roomId = document.getElementById('roomId').value;
+                    const message = {
+                        event: 'message',
+                        data: {
+                            type: 'ice-candidate',
+                            candidate: event.candidate.candidate,
+                            sdpMid: event.candidate.sdpMid,
+                            sdpMLineIndex: event.candidate.sdpMLineIndex,
+                            session_id: sessionId || 'test-session',
+                            room_id: roomId
+                        }
+                    };
+                    ws.send(JSON.stringify(message));
+                    log('Sent ICE candidate');
+                }
+            };
+
+            // Handle remote stream
+            peerConnection.ontrack = function(event) {
+                log('Received remote stream');
+                document.getElementById('remoteVideo').srcObject = event.streams[0];
+            };
+
+            // Handle connection state changes
+            peerConnection.onconnectionstatechange = function() {
+                log(`Connection state: ${peerConnection.connectionState}`);
+                if (peerConnection.connectionState === 'connected') {
+                    updateCallStatus('Connected');
+                } else if (peerConnection.connectionState === 'connecting') {
+                    updateCallStatus('Connecting...');
+                } else if (peerConnection.connectionState === 'disconnected') {
+                    updateCallStatus('Disconnected');
+                } else if (peerConnection.connectionState === 'failed') {
+                    updateCallStatus('Connection failed');
+                }
+            };
+        }
+
+        // Switch to screen share during call
+        async function switchToScreenShare() {
+            try {
+                updateCallStatus('Switching to screen share...');
+
+                // Get screen share stream
+                const screenStream = await navigator.mediaDevices.getDisplayMedia({
+                    video: true,
+                    audio: true
+                });
+
+                // Add microphone audio
+                try {
+                    const audioStream = await navigator.mediaDevices.getUserMedia({
+                        video: false,
+                        audio: true
+                    });
+
+                    // Combine screen video with microphone audio
+                    const combinedStream = new MediaStream([
+                        ...screenStream.getVideoTracks(),
+                        ...audioStream.getAudioTracks()
+                    ]);
+
+                    await switchStream(combinedStream);
+                    log('Switched to screen share');
+                } catch (audioError) {
+                    await switchStream(screenStream);
+                    log('Switched to screen share (no microphone)');
+                }
+
+                // Update UI
+                document.getElementById('screenShareBtn').style.display = 'none';
+                document.getElementById('cameraBtn').style.display = 'inline';
+
+            } catch (error) {
+                log(`Screen share switch failed: ${error.message}`);
+                updateCallStatus('Screen share failed');
+            }
+        }
+
+        // Switch to camera during call
+        async function switchToCamera() {
+            try {
+                updateCallStatus('Switching to camera...');
+
+                // Get camera stream
+                const cameraStream = await navigator.mediaDevices.getUserMedia({
+                    video: true,
+                    audio: true
+                });
+
+                await switchStream(cameraStream);
+                log('Switched to camera');
+
+                // Update UI
+                document.getElementById('screenShareBtn').style.display = 'inline';
+                document.getElementById('cameraBtn').style.display = 'none';
+
+            } catch (error) {
+                log(`Camera switch failed: ${error.message}`);
+                updateCallStatus('Camera switch failed');
+            }
+        }
+
+        // Helper function to switch streams
+        async function switchStream(newStream) {
+            if (!peerConnection) {
+                return;
+            }
+
+            // Stop old stream
+            if (localStream) {
+                localStream.getTracks().forEach(track => track.stop());
+            }
+
+            // Update local stream
+            localStream = newStream;
+            document.getElementById('localVideo').srcObject = localStream;
+
+            // Replace tracks in peer connection
+            const senders = peerConnection.getSenders();
+            const newTracks = newStream.getTracks();
+
+            for (const sender of senders) {
+                const track = sender.track;
+                if (track) {
+                    const newTrack = newTracks.find(t => t.kind === track.kind);
+                    if (newTrack) {
+                        await sender.replaceTrack(newTrack);
+                    }
+                }
+            }
+
+            updateCallStatus('Stream switched');
+        }
+
+        async function handleOffer(message) {
+            try {
+                log('Processing incoming offer...');
+                updateCallStatus('Incoming call...');
+
+                if (!localStream) {
+                    // Get user media if not already available
+                    updateCallStatus('Getting media...');
+                    localStream = await getUserMedia();
+                    document.getElementById('localVideo').srcObject = localStream;
+                    log('Got local media stream');
+
+                    // Show appropriate switch buttons
+                    const mediaType = getSelectedMediaType();
+                    if (mediaType === 'camera') {
+                        document.getElementById('screenShareBtn').style.display = 'inline';
+                        document.getElementById('cameraBtn').style.display = 'none';
+                    } else {
+                        document.getElementById('screenShareBtn').style.display = 'none';
+                        document.getElementById('cameraBtn').style.display = 'inline';
+                    }
+                }
+
+                // Create peer connection if not exists
+                if (!peerConnection) {
+                    createPeerConnection();
+                    log('Created peer connection');
+                }
+
+                // Add local stream
+                localStream.getTracks().forEach(track => {
+                    peerConnection.addTrack(track, localStream);
+                });
+                log('Added local tracks to peer connection');
+
+                updateCallStatus('Processing offer...');
+
+                // Set remote description
+                const remoteDescription = new RTCSessionDescription({
+                    type: 'offer',
+                    sdp: message.sdp
+                });
+                await peerConnection.setRemoteDescription(remoteDescription);
+                log('Set remote description');
+
+                // Process any pending ICE candidates
+                await processPendingIceCandidates();
+
+                updateCallStatus('Creating answer...');
+
+                // Create and send answer
+                const answer = await peerConnection.createAnswer();
+                await peerConnection.setLocalDescription(answer);
+                log('Created and set local answer');
+
+                const answerMessage = {
+                    event: 'message',
+                    data: {
+                        type: 'answer',
+                        sdp: answer.sdp,
+                        session_id: sessionId || 'test-session',
+                        room_id: message.room_id
+                    }
+                };
+
+                ws.send(JSON.stringify(answerMessage));
+                log('Sent answer for incoming call');
+                updateCallStatus('Call answered');
+            } catch (error) {
+                log(`Error handling offer: ${error.message}`);
+                updateCallStatus(`Error: ${error.message}`);
+                console.error('Full error:', error);
+            }
+        }
+
+        async function handleAnswer(message) {
+            try {
+                const remoteDescription = new RTCSessionDescription({
+                    type: 'answer',
+                    sdp: message.sdp
+                });
+                await peerConnection.setRemoteDescription(remoteDescription);
+                log('Set remote description from answer');
+
+                // Process any pending ICE candidates
+                await processPendingIceCandidates();
+            } catch (error) {
+                log(`Error handling answer: ${error.message}`);
+                console.error('Full error:', error);
+            }
+        }
+
+        async function handleIceCandidate(message) {
+            try {
+                if (peerConnection && peerConnection.remoteDescription) {
+                    const candidate = new RTCIceCandidate({
+                        candidate: message.candidate,
+                        sdpMid: message.sdpMid,
+                        sdpMLineIndex: message.sdpMLineIndex
+                    });
+                    await peerConnection.addIceCandidate(candidate);
+                    log('Added ICE candidate');
+                } else {
+                    // Store for later processing
+                    pendingIceCandidates.push(message);
+                    log('Stored ICE candidate for later processing');
+                }
+            } catch (error) {
+                log(`Error handling ICE candidate: ${error.message}`);
+                console.error('Full error:', error);
+            }
+        }
+
+        async function processPendingIceCandidates() {
+            log(`Processing ${pendingIceCandidates.length} pending ICE candidates`);
+            while (pendingIceCandidates.length > 0) {
+                const message = pendingIceCandidates.shift();
+                try {
+                    const candidate = new RTCIceCandidate({
+                        candidate: message.candidate,
+                        sdpMid: message.sdpMid,
+                        sdpMLineIndex: message.sdpMLineIndex
+                    });
+                    await peerConnection.addIceCandidate(candidate);
+                    log('Added pending ICE candidate');
+                } catch (error) {
+                    log(`Error adding pending ICE candidate: ${error.message}`);
+                }
+            }
+        }
+
+        function hangup() {
+            if (peerConnection) {
+                peerConnection.close();
+                peerConnection = null;
+                log('Call ended');
+            }
+
+            if (localStream) {
+                localStream.getTracks().forEach(track => track.stop());
+                localStream = null;
+            }
+
+            // Clear pending ICE candidates
+            pendingIceCandidates = [];
+
+            // Reset UI
+            document.getElementById('localVideo').srcObject = null;
+            document.getElementById('remoteVideo').srcObject = null;
+            document.getElementById('screenShareBtn').style.display = 'none';
+            document.getElementById('cameraBtn').style.display = 'none';
+            updateCallStatus('Not connected');
+        }
+
+        // 페이지 로드 시 자동 연결 시도
+        window.onload = function() {
+            log('Test client loaded. Click "Connect" to start testing.');
+        };
+    </script>
+</body>
+</html>
