@@ -73,3 +73,6 @@ coverage/
 # Ignore anything you specifically generate in your workflow
 axum-dev.log
 access.log
+
+# Test logs folder
+logs/

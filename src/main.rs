@@ -7,7 +7,7 @@ use axum::{
 use tower::ServiceBuilder;
 use tower_http::cors::CorsLayer;
 use tracing_subscriber;
-use signaling_server::{SignalingState, nestjs_websocket_handler};
+use signaling_server::{SignalingState, nestjs_websocket_handler, connection_status_handler};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -21,6 +21,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Setting up signaling server for NestJS communication...");
     let app = Router::new()
         .route("/rtc", get(nestjs_websocket_handler))  // NestJS와 WebSocket 연결
+        .route("/status", get(connection_status_handler))  // 연결 상태 확인
         .layer(
             ServiceBuilder::new()
                 .layer(CorsLayer::permissive())

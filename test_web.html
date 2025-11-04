@@ -1,0 +1,480 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>재연결 로직 웹 테스트</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        .container {
+            background: white;
+            border-radius: 12px;
+            padding: 30px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #333;
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        .status {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            font-weight: 500;
+        }
+        .status.connected { background: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
+        .status.disconnected { background: #f8d7da; color: #721c24; border: 1px solid #f1aeb5; }
+        .status.reconnecting { background: #fff3cd; color: #856404; border: 1px solid #ffeaa7; }
+        .status.failed { background: #f8d7da; color: #721c24; border: 1px solid #f1aeb5; }
+
+        .controls {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin-bottom: 30px;
+        }
+
+        button {
+            padding: 12px 20px;
+            border: none;
+            border-radius: 6px;
+            font-size: 14px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .btn-primary { background: #007bff; color: white; }
+        .btn-primary:hover { background: #0056b3; }
+        .btn-danger { background: #dc3545; color: white; }
+        .btn-danger:hover { background: #c82333; }
+        .btn-warning { background: #ffc107; color: #212529; }
+        .btn-warning:hover { background: #e0a800; }
+        .btn-success { background: #28a745; color: white; }
+        .btn-success:hover { background: #1e7e34; }
+        .btn-secondary { background: #6c757d; color: white; }
+        .btn-secondary:hover { background: #545b62; }
+
+        button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .stats {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 15px;
+            margin-bottom: 30px;
+        }
+
+        .stat {
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 6px;
+            text-align: center;
+        }
+
+        .stat-value {
+            font-size: 24px;
+            font-weight: bold;
+            color: #333;
+        }
+
+        .stat-label {
+            font-size: 12px;
+            color: #666;
+            margin-top: 5px;
+        }
+
+        .log {
+            background: #000;
+            color: #0f0;
+            font-family: 'Monaco', 'Menlo', monospace;
+            padding: 20px;
+            border-radius: 6px;
+            height: 400px;
+            overflow-y: auto;
+            white-space: pre-wrap;
+            font-size: 12px;
+            line-height: 1.4;
+        }
+
+        .log-entry {
+            margin-bottom: 4px;
+        }
+
+        .log-time {
+            color: #888;
+        }
+
+        .log-info { color: #0ff; }
+        .log-success { color: #0f0; }
+        .log-error { color: #f00; }
+        .log-warning { color: #ff0; }
+
+        .config {
+            background: #f8f9fa;
+            padding: 20px;
+            border-radius: 6px;
+            margin-bottom: 20px;
+        }
+
+        .config h3 {
+            margin-top: 0;
+            margin-bottom: 15px;
+        }
+
+        .config-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+        }
+
+        .config-item {
+            display: flex;
+            flex-direction: column;
+        }
+
+        label {
+            font-size: 12px;
+            color: #666;
+            margin-bottom: 5px;
+        }
+
+        input {
+            padding: 8px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔄 재연결 로직 웹 테스트</h1>
+
+        <div id="status" class="status disconnected">
+            <span id="status-text">연결 안됨</span>
+            <span id="status-details"></span>
+        </div>
+
+        <div class="config">
+            <h3>⚙️ 설정</h3>
+            <div class="config-grid">
+                <div class="config-item">
+                    <label>서버 URL</label>
+                    <input type="text" id="serverUrl" value="ws://localhost:3002/rtc">
+                </div>
+                <div class="config-item">
+                    <label>최대 재연결 시도</label>
+                    <input type="number" id="maxAttempts" value="5" min="1" max="10">
+                </div>
+                <div class="config-item">
+                    <label>초기 지연 시간 (ms)</label>
+                    <input type="number" id="initialDelay" value="1000" min="100" step="100">
+                </div>
+                <div class="config-item">
+                    <label>하트비트 간격 (ms)</label>
+                    <input type="number" id="heartbeatInterval" value="10000" min="1000" step="1000">
+                </div>
+            </div>
+        </div>
+
+        <div class="controls">
+            <button id="connectBtn" class="btn-primary">🔌 연결</button>
+            <button id="disconnectBtn" class="btn-danger" disabled>🔌 연결 해제</button>
+            <button id="simulateFailureBtn" class="btn-warning" disabled>💥 네트워크 실패 시뮬레이션</button>
+            <button id="sendMessageBtn" class="btn-success" disabled>📤 테스트 메시지 전송</button>
+            <button id="clearLogBtn" class="btn-secondary">🗑️ 로그 지우기</button>
+            <button id="checkServerBtn" class="btn-secondary">🔍 서버 상태 확인</button>
+        </div>
+
+        <div class="stats">
+            <div class="stat">
+                <div class="stat-value" id="connectionCount">0</div>
+                <div class="stat-label">총 연결 횟수</div>
+            </div>
+            <div class="stat">
+                <div class="stat-value" id="reconnectCount">0</div>
+                <div class="stat-label">재연결 시도 횟수</div>
+            </div>
+            <div class="stat">
+                <div class="stat-value" id="messageCount">0</div>
+                <div class="stat-label">전송 메시지 수</div>
+            </div>
+            <div class="stat">
+                <div class="stat-value" id="uptime">0s</div>
+                <div class="stat-label">연결 유지 시간</div>
+            </div>
+        </div>
+
+        <div class="log" id="log"></div>
+    </div>
+
+    <script>
+        class WebSocketReconnectTest {
+            constructor() {
+                this.ws = null;
+                this.isIntentionalClose = false;
+                this.reconnectAttempts = 0;
+                this.connectionCount = 0;
+                this.messageCount = 0;
+                this.connectedAt = null;
+                this.heartbeatInterval = null;
+                this.uptimeInterval = null;
+
+                this.initEventListeners();
+                this.log('시스템', '웹소켓 재연결 테스트 시작', 'info');
+            }
+
+            initEventListeners() {
+                document.getElementById('connectBtn').addEventListener('click', () => this.connect());
+                document.getElementById('disconnectBtn').addEventListener('click', () => this.disconnect());
+                document.getElementById('simulateFailureBtn').addEventListener('click', () => this.simulateFailure());
+                document.getElementById('sendMessageBtn').addEventListener('click', () => this.sendTestMessage());
+                document.getElementById('clearLogBtn').addEventListener('click', () => this.clearLog());
+                document.getElementById('checkServerBtn').addEventListener('click', () => this.checkServerStatus());
+            }
+
+            connect() {
+                if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+                    this.log('연결', '이미 연결되어 있습니다', 'warning');
+                    return;
+                }
+
+                const url = document.getElementById('serverUrl').value;
+                this.log('연결', `연결 시도: ${url}`, 'info');
+
+                this.ws = new WebSocket(url);
+                this.connectionCount++;
+                this.updateStats();
+
+                this.ws.onopen = (event) => {
+                    this.log('연결', '✅ WebSocket 연결 성공!', 'success');
+                    this.connectedAt = Date.now();
+                    this.reconnectAttempts = 0;
+                    this.isIntentionalClose = false;
+                    this.updateStatus('connected', '연결됨');
+                    this.updateButtons(true);
+                    this.startHeartbeat();
+                    this.startUptimeCounter();
+                };
+
+                this.ws.onmessage = (event) => {
+                    this.log('메시지', `📨 수신: ${event.data}`, 'info');
+
+                    try {
+                        const data = JSON.parse(event.data);
+                        if (data.type === 'peer-created') {
+                            this.log('응답', `🎯 피어 생성 ${data.success ? '성공' : '실패'}`, data.success ? 'success' : 'error');
+                        }
+                    } catch (e) {
+                        // 원시 메시지 처리
+                    }
+                };
+
+                this.ws.onclose = (event) => {
+                    this.log('연결', `❌ 연결 종료 (코드: ${event.code}, 이유: ${event.reason || '없음'})`, 'error');
+                    this.updateStatus('disconnected', '연결 끊어짐');
+                    this.updateButtons(false);
+                    this.stopHeartbeat();
+                    this.stopUptimeCounter();
+
+                    if (!this.isIntentionalClose && event.code !== 1000) {
+                        this.attemptReconnect();
+                    }
+                };
+
+                this.ws.onerror = (error) => {
+                    this.log('오류', `🚫 WebSocket 오류 발생`, 'error');
+                };
+            }
+
+            disconnect() {
+                this.log('연결', '🔌 의도적 연결 해제', 'warning');
+                this.isIntentionalClose = true;
+                if (this.ws) {
+                    this.ws.close(1000, '사용자 요청');
+                }
+            }
+
+            simulateFailure() {
+                this.log('시뮬레이션', '💥 네트워크 실패 시뮬레이션 (강제 종료)', 'warning');
+                if (this.ws) {
+                    // 강제 종료로 네트워크 실패 시뮬레이션
+                    this.ws.close(1006);
+                }
+            }
+
+            attemptReconnect() {
+                const maxAttempts = parseInt(document.getElementById('maxAttempts').value);
+
+                if (this.reconnectAttempts >= maxAttempts) {
+                    this.log('재연결', `❌ 최대 재연결 시도 횟수(${maxAttempts}) 초과`, 'error');
+                    this.updateStatus('failed', '재연결 실패');
+                    return;
+                }
+
+                this.reconnectAttempts++;
+                const initialDelay = parseInt(document.getElementById('initialDelay').value);
+                const delay = initialDelay * Math.pow(2, this.reconnectAttempts - 1);
+
+                this.log('재연결', `🔄 재연결 시도 ${this.reconnectAttempts}/${maxAttempts} - ${delay}ms 후 시도`, 'warning');
+                this.updateStatus('reconnecting', `재연결 중... (${this.reconnectAttempts}/${maxAttempts})`);
+                this.updateStats();
+
+                setTimeout(() => {
+                    if (!this.isIntentionalClose) {
+                        this.connect();
+                    }
+                }, delay);
+            }
+
+            sendTestMessage() {
+                if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+                    this.log('메시지', '❌ 연결되지 않음 - 메시지 전송 실패', 'error');
+                    return;
+                }
+
+                const message = {
+                    type: 'create-peer',
+                    session_id: `web-test-${Date.now()}`,
+                    room_id: 'web-test-room'
+                };
+
+                this.ws.send(JSON.stringify(message));
+                this.messageCount++;
+                this.log('메시지', `📤 전송: ${JSON.stringify(message)}`, 'info');
+                this.updateStats();
+            }
+
+            startHeartbeat() {
+                const interval = parseInt(document.getElementById('heartbeatInterval').value);
+
+                this.heartbeatInterval = setInterval(() => {
+                    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+                        // WebSocket의 내장 ping 대신 커스텀 ping 메시지
+                        this.log('하트비트', '💓 하트비트 전송', 'info');
+
+                        // ping/pong은 브라우저에서 자동으로 처리되므로
+                        // 여기서는 간단한 상태 체크만 수행
+                        if (this.ws.readyState !== WebSocket.OPEN) {
+                            this.log('하트비트', '💔 하트비트 실패 - 연결 상태 이상', 'error');
+                        }
+                    }
+                }, interval);
+            }
+
+            stopHeartbeat() {
+                if (this.heartbeatInterval) {
+                    clearInterval(this.heartbeatInterval);
+                    this.heartbeatInterval = null;
+                }
+            }
+
+            startUptimeCounter() {
+                this.uptimeInterval = setInterval(() => {
+                    this.updateUptime();
+                }, 1000);
+            }
+
+            stopUptimeCounter() {
+                if (this.uptimeInterval) {
+                    clearInterval(this.uptimeInterval);
+                    this.uptimeInterval = null;
+                }
+            }
+
+            updateUptime() {
+                if (this.connectedAt) {
+                    const uptime = Math.floor((Date.now() - this.connectedAt) / 1000);
+                    document.getElementById('uptime').textContent = `${uptime}s`;
+                }
+            }
+
+            async checkServerStatus() {
+                try {
+                    const response = await fetch('http://localhost:3002/status');
+                    const status = await response.json();
+
+                    this.log('서버상태', `🔍 서버 상태: ${JSON.stringify(status, null, 2)}`, 'info');
+                } catch (error) {
+                    this.log('서버상태', `❌ 서버 상태 확인 실패: ${error.message}`, 'error');
+                }
+            }
+
+            updateStatus(state, text) {
+                const statusEl = document.getElementById('status');
+                const statusTextEl = document.getElementById('status-text');
+                const statusDetailsEl = document.getElementById('status-details');
+
+                statusEl.className = `status ${state}`;
+                statusTextEl.textContent = text;
+
+                if (state === 'reconnecting') {
+                    statusDetailsEl.textContent = `시도: ${this.reconnectAttempts}`;
+                } else {
+                    statusDetailsEl.textContent = '';
+                }
+            }
+
+            updateButtons(connected) {
+                document.getElementById('connectBtn').disabled = connected;
+                document.getElementById('disconnectBtn').disabled = !connected;
+                document.getElementById('simulateFailureBtn').disabled = !connected;
+                document.getElementById('sendMessageBtn').disabled = !connected;
+            }
+
+            updateStats() {
+                document.getElementById('connectionCount').textContent = this.connectionCount;
+                document.getElementById('reconnectCount').textContent = this.reconnectAttempts;
+                document.getElementById('messageCount').textContent = this.messageCount;
+            }
+
+            log(category, message, type = 'info') {
+                const now = new Date();
+                const timestamp = now.toLocaleTimeString('ko-KR', {
+                    hour12: false,
+                    hour: '2-digit',
+                    minute: '2-digit',
+                    second: '2-digit',
+                    fractionalSecondDigits: 3
+                });
+
+                const logEl = document.getElementById('log');
+                const entry = document.createElement('div');
+                entry.className = `log-entry log-${type}`;
+                entry.innerHTML = `<span class="log-time">[${timestamp}]</span> [${category}] ${message}`;
+
+                logEl.appendChild(entry);
+                logEl.scrollTop = logEl.scrollHeight;
+
+                // 로그가 너무 많아지면 오래된 것들 제거
+                const entries = logEl.getElementsByClassName('log-entry');
+                if (entries.length > 1000) {
+                    logEl.removeChild(entries[0]);
+                }
+            }
+
+            clearLog() {
+                document.getElementById('log').innerHTML = '';
+                this.log('시스템', '로그가 지워졌습니다', 'info');
+            }
+        }
+
+        // 페이지 로드 시 테스트 클래스 초기화
+        document.addEventListener('DOMContentLoaded', () => {
+            window.wsTest = new WebSocketReconnectTest();
+        });
+    </script>
+</body>
+</html>
